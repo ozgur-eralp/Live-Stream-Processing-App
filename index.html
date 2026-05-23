@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Security: Content Security Policy to restrict sources -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self'; 
+      script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline' blob: 'unsafe-eval'; 
+      connect-src 'self' https://cdn.jsdelivr.net https://huggingface.co https://*.hf.co https://test-streams.mux.dev http://*.kaltura.com https://*.kaltura.com; 
+      img-src 'self' data:; 
+      media-src 'self' blob: https://test-streams.mux.dev http://*.kaltura.com https://*.kaltura.com; 
+      style-src 'self' 'unsafe-inline';">
+    <title>Live Stream Processing (ASR & Vision)</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        padding: 20px;
+        background-color: #000; /* Black background */
+        color: #fff; /* White text */
+      }
+      .main-container {
+        display: flex;
+        gap: 20px; /* Space between sections */
+        align-items: flex-start; /* Align items to the top */
+        width: fit-content; /* Adjust width to content */
+      }
+      .video-section {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .text-sections {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        background-color: #333; /* Darker background for text areas */
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5); /* Adjusted shadow */
+      }
+      .controls {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        background-color: #333;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+        flex-wrap: wrap; /* Allow controls to wrap if needed */
+      }
+      textarea {
+        width: 100%;
+        height: 80px;
+        padding: 8px;
+        border: 1px solid #555;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+        background-color: #444;
+        color: #eee;
+        resize: vertical; /* Allow vertical resizing */
+      }
+      input[type="text"] {
+        flex-grow: 1; /* Allow input to take available space */
+        padding: 8px;
+        border-radius: 4px;
+        border: 1px solid #555;
+        background-color: #444;
+        color: #eee;
+      }
+      #videoFeed {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border-radius: 6px;
+        object-fit: cover;
+      }
+      #videoContainer {
+        position: relative;
+        width: 820px; /* Standard video width */
+        height: 455px; /* 16:9 aspect ratio */
+        border: 2px solid #555;
+        background-color: #000;
+        border-radius: 8px;
+      }
+      #loadingOverlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: none;
+        justify-content: center;
+        align-items: center;
+        background-color: rgba(0, 0, 0, 0.8);
+        z-index: 10;
+        border-radius: 6px;
+        color: #ffffff;
+        font-size: 1.5em;
+        font-weight: bold;
+      }
+      .start-button {
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+        border: none;
+        border-radius: 4px;
+        color: white;
+      }
+      .start-button.start {
+        background-color: #28a745; /* Green */
+      }
+      .start-button.stop {
+        background-color: #dc3545; /* Red */
+      }
+      label {
+        font-weight: bold;
+        color: #eee;
+      }
+      select {
+        padding: 8px;
+        border-radius: 4px;
+        border: 1px solid #555;
+        background-color: #444;
+        color: #eee;
+      }
+      button {
+        padding: 8px 15px;
+        border-radius: 4px;
+        border: 1px solid #555;
+        background-color: #555;
+        color: white;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #666;
+      }
+      .hidden {
+        display: none;
+      }
+      .footer {
+        margin-top: 30px;
+        font-size: 0.6em;
+        color: #aaa;
+      }
+      #asrInstructionContainer {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      #asrInstructionContainer label {
+        white-space: nowrap; /* Prevent label from wrapping */
+      }
+      #vlmTokensContainer {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      #vlmTokensContainer label {
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Live Stream Processing (ASR & Vision)</h1>
+    <div class="main-container">
+      <div class="video-section">
+        <div id="videoContainer">
+          <video id="videoFeed" autoplay playsinline controls></video>
+          <div id="loadingOverlay">Loading AI Models...</div>
+        </div>
+        <canvas id="canvas" class="hidden"></canvas>
+        <div class="controls">
+          <label for="hlsUrl">HLS Stream URL:</label>
+          <input
+            type="text"
+            id="hlsUrl"
+            value="http://cdnapi.kaltura.com/p/1878761/sp/187876100/playManifest/entryId/1_2xvajead/flavorIds/1_tl01409m,1_kptb3ez8,1_re3akioy,1_wuylsxwp/format/applehttp/protocol/http/a.m3u8"
+            size="60"
+          />
+          <button id="loadStreamButton">Load Stream</button>
+        </div>
+      </div>
+      <div class="text-sections">
+        <div>
+          <label for="appStatusText">App Status:</label><br />
+          <textarea
+            id="appStatusText"
+            style="height: 7em"
+            name="App Status"
+            readonly
+            placeholder="App status messages will appear here..."
+          ></textarea>
+        </div>
+        <div hidden>
+          <label for="subtitleText">Subtitles (ASR):</label><br />
+          <textarea
+            id="subtitleText"
+            style="height: 10em"
+            name="Subtitles"
+            readonly
+            placeholder="Speech-to-text subtitles will appear here..."
+          ></textarea>
+        </div>
+        <div>
+          <label for="visionResponseText">Vision Model Response:</label><br />
+          <textarea
+            id="visionResponseText"
+            style="height: 15em"
+            name="Vision Response"
+            readonly
+            placeholder="Combined ASR and Vision analysis will appear here..."
+          ></textarea>
+        </div>
+        <div class="controls" style="box-shadow: none; padding: 0">
+          <div id="asrInstructionContainer">
+            <label for="asrChunkDuration">ASR Chunk Duration:</label>
+            <select id="asrChunkDuration" name="ASR Chunk Duration">
+              <option value="2000">2s</option>
+              <option value="3000" selected>3s</option>
+              <option value="4000">4s</option>
+              <option value="5000">5s</option>
+            </select>
+          </div>
+          <div id="vlmTokensContainer">
+            <label for="vlmMaxTokens">VLM Max Tokens:</label>
+            <select id="vlmMaxTokens" name="VLM Max Tokens">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="150">150</option>
+              <option value="200">200</option>
+            </select>
+          </div>
+          <button id="startProcessingButton" class="start-button start">
+            Start ASR & Vision
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="footer">
+      <p>All rights reserved by Ozgur Eralp 2025</p>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
+    <script type="module">
+      import {
+        AutoProcessor,
+        AutoModelForVision2Seq,
+        RawImage,
+        AutoModelForSpeechSeq2Seq,
+      } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers/dist/transformers.min.js";
+      // --- DOM Elements ---
+      const video = document.getElementById("videoFeed");
+      const canvas = document.getElementById("canvas");
+      const appStatusText = document.getElementById("appStatusText");
+      const subtitleText = document.getElementById("subtitleText");
+      const visionResponseText = document.getElementById("visionResponseText");
+      const asrChunkDurationSelect = document.getElementById(
+        "asrChunkDuration"
+      );
+      const vlmMaxTokensSelect = document.getElementById("vlmMaxTokens");
+      const startProcessingButton = document.getElementById(
+        "startProcessingButton"
+      );
+      const loadingOverlay = document.getElementById("loadingOverlay");
+      const hlsUrlInput = document.getElementById("hlsUrl");
+      const loadStreamButton = document.getElementById("loadStreamButton");
+      // --- Global HLS Variable ---
+      let hls;
+      // --- ASR Processing Variables ---
+      let asrProcessor, asrModel;
+      let audioContext;
+      let audioWorkletNode; 
+      let mediaSource;
+      let audioBufferAccumulator = []; 
+      const ASR_SAMPLE_RATE = 16000; // Whisper model's expected sample rate
+      // --- Vision Processing Variables ---
+      let visionProcessor, visionModel;
+      // --- Combined Processing State ---
+      let isProcessingActive = false; // Controls the main combined loop
+      let asrChunkDurationMs = parseInt(asrChunkDurationSelect.value, 10);
+      let vlmMaxTokens = parseInt(vlmMaxTokensSelect.value, 10);
+      let lastASRProcessTime = 0;
+      // --- UTILITY FUNCTIONS ---
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+      
+      /**
+       * Logs a message to the App Status textarea with a timestamp.
+       */
+      function logStatus(message) {
+        const timestamp = new Date().toLocaleTimeString();
+        appStatusText.value += `[${timestamp}] ${message}\n`;
+        appStatusText.scrollTop = appStatusText.scrollHeight;
+      }
+
+      // --- HLS STREAMING FUNCTIONS ---
+      function initHLSStream(url) {
+        if (Hls.isSupported()) {
+          if (hls) {
+            hls.destroy(); // Destroy previous HLS instance if exists
+          }
+          hls = new Hls();
+          hls.loadSource(url);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, function () {
+            video.play();
+            logStatus(`HLS stream loaded and playing...`);
+          });
+          hls.on(Hls.Events.ERROR, function (event, data) {
+            console.error("HLS.js error:", data);
+            logStatus(`Error loading HLS stream: ${data.details}. Check URL/CORS/CSP.`);
+            if (data.fatal) {
+              switch (data.type) {
+                case Hls.ErrorTypes.NETWORK_ERROR:
+                  hls.recoverMediaError();
+                  break;
+                case Hls.ErrorTypes.MEDIA_ERROR:
+                  hls.recoverMediaError();
+                  break;
+                default:
+                  hls.destroy();
+                  break;
+              }
+            }
+          });
+        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          // Native HLS support (Safari, iOS)
+          video.src = url;
+          video.addEventListener("loadedmetadata", () => {
+            video.play();
+            logStatus(`Native HLS stream loaded and playing.`);
+          });
+        } else {
+          logStatus(
+            "Error: Browser does not support HLS streams."
+          );
+          alert(
+            "Your browser does not support HLS streams with hls.js or natively."
+          );
+        }
+      }
+      // --- AI Model Loading ---
+      async function initModels() {
+        loadingOverlay.style.display = "flex";
+        const updateLoadingStatus = (msg) => {
+          logStatus(msg);
+          console.log(`[AI Initializer] ${msg}`);
+          loadingOverlay.textContent = msg;
+        };
+        
+        // SmolVLM-500M is a Vision-Language Model. 
+        // We use 'q4' (4-bit quantization) for the heavy parts (vision_encoder, decoder)
+        // and 'fp16' for tokens to balance inference speed and memory usage on WebGPU.
+        updateLoadingStatus("Loading Vision processor...");
+        visionProcessor = await AutoProcessor.from_pretrained(
+          "HuggingFaceTB/SmolVLM-500M-Instruct"
+        );
+        updateLoadingStatus("Loading Vision model (WebGPU)...");
+        visionModel = await AutoModelForVision2Seq.from_pretrained(
+          "HuggingFaceTB/SmolVLM-500M-Instruct",
+          {
+            dtype: {
+              embed_tokens: "fp16",
+              vision_encoder: "q4",
+              decoder_model_merged: "q4",
+            },
+            device: "webgpu",
+          }
+        );
+        updateLoadingStatus("Loading ASR processor...");
+        asrProcessor = await AutoProcessor.from_pretrained(
+          "Xenova/whisper-tiny.en"
+        );
+        updateLoadingStatus("Loading ASR model (Whisper)...");
+        
+        // Whisper-tiny is quantized to 4-bit to ensure it fits in VRAM alongside the vision model.
+        asrModel = await AutoModelForSpeechSeq2Seq.from_pretrained(
+          "Xenova/whisper-tiny.en",
+          {
+            dtype: {
+              model: "q4",
+            },
+            device: "webgpu",
+          }
+        );
+        updateLoadingStatus("All models loaded. Ready!");
+        loadingOverlay.style.display = "none";
+      }
+      // --- ASR Processing ---
+      async function runASRInference(audioData) {
+        if (!asrProcessor || !asrModel) {
+          console.error("ASR model not loaded.");
+          return "";
+        }
+
+        // We find the maximum amplitude and scale the entire chunk to 1.0.
+        let maxAmp = 0;
+        for (let i = 0; i < audioData.length; i++) {
+          const abs = Math.abs(audioData[i]);
+          if (abs > maxAmp) maxAmp = abs;
+        }
+        if (maxAmp > 0 && maxAmp < 0.9) {
+          const gain = 1.0 / maxAmp;
+          for (let i = 0; i < audioData.length; i++) audioData[i] *= gain;
+        }
+
+        try {
+          const inputs = await asrProcessor(audioData, {
+            sampling_rate: ASR_SAMPLE_RATE,
+          });
+          const generatedIds = await asrModel.generate({
+            ...inputs,
+            max_new_tokens: 64,
+            do_sample: false, // Forces greedy decoding, reducing randomness
+            repetition_penalty: 1.2, // Discourages repeating tokens
+          });
+          const output = asrProcessor.batch_decode(generatedIds, {
+            skip_special_tokens: true,
+          });
+          return output[0].trim();
+        } catch (e) {
+          console.error("ASR inference error:", e);
+          appStatusText.value += `ASR Error: ${e.message}\n`;
+          return "";
+        }
+      }
+      function startAudioContextAndProcessor() {
+        if (!audioContext) {
+          audioContext = new (window.AudioContext ||
+            window.webkitAudioContext)();
+        }
+
+        // AudioContext often starts 'suspended'. Resume on user interaction.
+        if (audioContext.state === "suspended") {
+          const resumeContext = () => {
+            audioContext.resume().then(() => {
+              console.log("AudioContext resumed successfully");
+              document.removeEventListener("click", resumeContext);
+              document.removeEventListener("touchstart", resumeContext);
+            });
+          };
+          document.addEventListener("click", resumeContext);
+          document.addEventListener("touchstart", resumeContext);
+        }
+
+        if (!mediaSource) {
+          mediaSource = audioContext.createMediaElementSource(video);
+        }
+
+        // Register and create AudioWorkletNode
+        if (!audioWorkletNode) {
+          audioContext.audioWorklet.addModule('audio-processor.js').then(() => {
+            audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-resampler-processor');
+            audioWorkletNode.port.onmessage = (event) => {
+              if (event.data.type === 'audioData' && isProcessingActive) {
+                // Optimization: Use a loop for pushing to avoid stack limits on large chunks
+                for (let i = 0; i < event.data.data.length; i++) {
+                  audioBufferAccumulator.push(event.data.data[i]);
+                }
+              }
+            };
+            mediaSource.connect(audioWorkletNode);
+            audioWorkletNode.connect(audioContext.destination);
+            audioWorkletNode.port.postMessage({ type: 'setTargetSampleRate', sampleRate: ASR_SAMPLE_RATE });
+          }).catch(e => {
+            console.error("Error loading AudioWorklet module:", e);
+            appStatusText.value += `Error loading audio processor: ${e.message}\n`;
+          });
+        } else {
+          mediaSource.connect(audioWorkletNode);
+          audioWorkletNode.connect(audioContext.destination);
+        }
+      }
+
+      function stopAudioContextAndProcessor() {
+        if (audioWorkletNode) {
+          audioWorkletNode.disconnect();
+        }
+        if (mediaSource) {
+          mediaSource.disconnect();
+          mediaSource = null;
+        }
+        if (audioContext) {
+          audioContext.close().then(() => {
+            console.log("AudioContext closed");
+            audioContext = null;
+          });
+        }
+        audioBufferAccumulator = []; // Clear audio buffer
+      }
+      // --- Vision Processing ---
+      function captureImage() {
+        if (!video || video.paused || video.ended || video.videoWidth === 0) {
+          console.warn("Video stream not ready for capture.");
+          return null;
+        }
+
+        // Optimization: Scale down to a reasonable size for the Vision model (e.g., max 384px)
+        // This significantly reduces memory usage and speeds up vision inference.
+        const targetSize = 384;
+        const scale = Math.min(1, targetSize / Math.max(video.videoWidth, video.videoHeight));
+        canvas.width = video.videoWidth * scale;
+        canvas.height = video.videoHeight * scale;
+
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const frame = context.getImageData(0, 0, canvas.width, canvas.height);
+        return new RawImage(frame.data, frame.width, frame.height, 4);
+      }
+      /**
+       * Performs Vision-Language inference using the captured frame and ASR text as context.
+       */
+      async function runVisionInference(imgElement, instruction) {
+        if (!visionProcessor || !visionModel) {
+          console.error("Vision model not loaded.");
+          return "";
+        }
+        const messages = [
+          {
+            role: "user",
+            content: [{ type: "image" }, { type: "text", text: instruction }],
+          },
+        ];
+        const text = visionProcessor.apply_chat_template(messages, {
+          add_generation_prompt: true,
+        });
+        try {
+          // Generate vision description. Image splitting is disabled for speed.
+          const inputs = await visionProcessor(text, [imgElement], {
+            do_image_splitting: false,
+          });
+          const generatedIds = await visionModel.generate({
+            ...inputs,
+            max_new_tokens: vlmMaxTokens,
+            do_sample: false, // Disables randomness; model always picks the most likely next word
+            repetition_penalty: 1.2, // Discourages the model from repeating the same phrases
+          });
+          const output = visionProcessor.batch_decode(
+            generatedIds.slice(null, [inputs.input_ids.dims.at(-1), null]),
+            { skip_special_tokens: true }
+          );
+          return output[0].trim();
+        } catch (e) {
+          console.error("Vision inference error:", e);
+          appStatusText.value += `Vision Error: ${e.message}\n`;
+          return "";
+        }
+      }
+      // --- Combined Processing Loop ---
+      async function combinedProcessingLoop() {
+        /**
+         * Orchestration Loop:
+         * 1. Collect accumulated audio since last run.
+         * 2. Run Whisper (ASR) to get transcription.
+         * 3. Capture current video frame.
+         * 4. Pass BOTH to the Vision model for multi-modal context.
+         */
+        while (isProcessingActive) {
+          const now = Date.now();
+          
+          // Only process if we have accumulated enough audio for the requested chunk duration
+          const samplesNeeded = (ASR_SAMPLE_RATE * asrChunkDurationMs) / 1000;
+          
+          if (audioBufferAccumulator.length >= samplesNeeded) {
+            // Optimization: Convert to TypedArray once and clear the accumulator without re-slicing
+            const chunkToProcess = Float32Array.from(audioBufferAccumulator);
+            audioBufferAccumulator.length = 0; // Clear the array without reallocating memory
+
+            logStatus("Processing ASR chunk and capturing frame...");
+            const transcription = await runASRInference(chunkToProcess);
+            if (transcription) {
+              subtitleText.value = transcription + "\n";
+              subtitleText.scrollTop = subtitleText.scrollHeight; // Auto-scroll
+            }
+            const rawImg = captureImage();
+            if (rawImg) {
+              // Construct instruction for vision model including ASR transcription
+              const instruction = `Based on the video frame, and the audio transcript "${transcription}", describe what is currently happening by using what's being said and seen at the same time.`;
+              logStatus("Running Vision inference...");
+              const visionReply = await runVisionInference(rawImg, instruction);
+              visionResponseText.value = `${visionReply}`;
+              visionResponseText.scrollTop = visionResponseText.scrollHeight; // Auto-scroll
+            } else {
+              visionResponseText.value +=
+                "Vision processing skipped: Video not ready or playing.\n\n";
+            }
+          }
+          
+          // Determine sleep duration based on when the next chunk is ready or a minimum interval
+          appStatusText.value = "Capturing ASR chunk...";
+          const timeSinceLastProcess = now - lastASRProcessTime;
+          let sleepTime = 1; // Default small sleep to prevent busy-waiting
+          if (timeSinceLastProcess < asrChunkDurationMs && lastASRProcessTime !== 0) {
+            sleepTime = Math.max(
+              100,
+              asrChunkDurationMs - timeSinceLastProcess
+            );
+          }
+          await sleep(sleepTime); // Pause briefly before next iteration
+          lastASRProcessTime = Date.now(); 
+        }
+        logStatus("Processing stopped.");
+      }
+      // --- Control Handlers ---
+      function handleStartProcessing() {
+        if (!video.videoWidth) {
+          logStatus("HLS stream not playing. Cannot start processing.");
+          alert("Please load and play the HLS stream first.");
+          return;
+        }
+        if (!asrProcessor || !asrModel || !visionProcessor || !visionModel) {
+          logStatus("AI models are still loading. Please wait.");
+          alert("AI models are still loading. Please wait a moment.");
+          return;
+        }
+        isProcessingActive = true;
+        startProcessingButton.textContent = "Stop Processing";
+        startProcessingButton.classList.replace("start", "stop");
+        asrChunkDurationSelect.disabled = true;
+        vlmMaxTokensSelect.disabled = true;
+        loadStreamButton.disabled = true;
+        startAudioContextAndProcessor(); // Start audio capture
+        combinedProcessingLoop(); // Start the main processing loop
+        logStatus("ASR & Vision processing started.");
+      }
+      function handleStopProcessing() {
+        isProcessingActive = false;
+        startProcessingButton.textContent = "Start ASR & Vision";
+        startProcessingButton.classList.replace("stop", "start");
+        asrChunkDurationSelect.disabled = false;
+        vlmMaxTokensSelect.disabled = false;
+        hlsUrlInput.disabled = false;
+        loadStreamButton.disabled = false;
+        stopAudioContextAndProcessor(); // Stop audio capture
+        // The processingLoop will set the final appStatusText value when it exits
+      }
+      // --- Event Listeners and Initial Setup ---
+      startProcessingButton.addEventListener("click", () => {
+        if (isProcessingActive) {
+          handleStopProcessing();
+        } else {
+          handleStartProcessing();
+        }
+      });
+      loadStreamButton.addEventListener("click", () => {
+        const url = hlsUrlInput.value.trim();
+        if (url) {
+          logStatus("Loading HLS stream...");
+          initHLSStream(url);
+        } else {
+          logStatus("Please enter an HLS URL.");
+        }
+      });
+      asrChunkDurationSelect.addEventListener("change", (event) => {
+        asrChunkDurationMs = parseInt(event.target.value, 10);
+      });
+      vlmMaxTokensSelect.addEventListener("change", (event) => {
+        vlmMaxTokens = parseInt(event.target.value, 10);
+      });
+      window.addEventListener("DOMContentLoaded", async () => {
+        // Check for WebGPU support
+        if (!navigator.gpu) {
+          const videoElement = document.getElementById("videoFeed");
+          const warningElement = document.createElement("p");
+          warningElement.textContent =
+            "WebGPU is not available in this browser. Performance may be impacted or models may not load.";
+          warningElement.style.color = "red";
+          warningElement.style.textAlign = "center";
+          videoElement.parentNode.insertBefore(
+            warningElement,
+            videoElement.nextSibling
+          );
+        }
+        await initModels(); // Load both AI models
+        initHLSStream(hlsUrlInput.value); // Automatically try to load the default stream
+      });
+      window.addEventListener("beforeunload", () => {
+        if (hls) {
+          hls.destroy();
+        }
+        stopAudioContextAndProcessor(); // Ensure audio context is closed on page unload
+      });
+    </script>
+  </body>
+</html>
